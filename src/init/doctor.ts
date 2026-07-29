@@ -51,6 +51,26 @@ export async function runDoctor(): Promise<number> {
       console.log(
         `  Slack bot token          ok ${origin(sources, "slack")} — ${bot.team} as @${bot.botName}`,
       );
+
+      // A valid token with missing scopes is the worst failure mode here: the
+      // app connects, reports healthy, and silently never receives the events
+      // it lacks permission for. Treat it as a failure, not a note.
+      if (bot.missingScopes.length > 0) {
+        failures += 1;
+        console.log("  Slack bot scopes         MISSING");
+        for (const { scope, needed } of bot.missingScopes) {
+          console.log(`    ${scope} — without it the bot cannot ${needed}`);
+        }
+        console.log(
+          "    Fix: api.slack.com/apps → your app → OAuth & Permissions →",
+        );
+        console.log(
+          "    add them under Bot Token Scopes → Reinstall to Workspace →",
+        );
+        console.log("    then re-run `remote-hands init` with the new token.");
+      } else {
+        console.log("  Slack bot scopes         ok");
+      }
     } else {
       failures += 1;
       console.log(`  Slack bot token          FAILED ${origin(sources, "slack")}`);

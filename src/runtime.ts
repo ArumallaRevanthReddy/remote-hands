@@ -69,6 +69,7 @@ function buildTransports(
         ...config.transports.slack,
         knows: (conversationId) => sessions.get(conversationId) !== undefined,
         approvalTimeoutMs: config.approvalTimeoutMs,
+        logLevel: config.logLevel,
       }),
     );
   }

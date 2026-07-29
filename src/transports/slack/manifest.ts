@@ -52,6 +52,23 @@ settings:
 export const SLACK_APPS_URL = "https://api.slack.com/apps";
 
 /**
+ * Scopes the bot token must actually carry, with what breaks without each.
+ *
+ * Declaring a scope in the manifest is not the same as the installed token
+ * having it — Slack's install flow can grant a subset, and the result is an app
+ * that connects perfectly and then never receives the events it is missing
+ * permission for. Checked at startup and by `doctor` because that failure is
+ * otherwise invisible.
+ */
+export const REQUIRED_BOT_SCOPES: ReadonlyArray<{ scope: string; needed: string }> = [
+  { scope: "app_mentions:read", needed: "receive @mentions" },
+  { scope: "channels:history", needed: "read replies in public channels" },
+  { scope: "groups:history", needed: "read replies in private channels" },
+  { scope: "im:history", needed: "receive direct messages" },
+  { scope: "chat:write", needed: "reply at all" },
+];
+
+/**
  * The click path, in the order Slack presents it. Written out because the
  * app-level token is generated on a different page from the bot token, which
  * is the step people most often miss.

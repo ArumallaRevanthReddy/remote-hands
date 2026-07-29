@@ -172,8 +172,26 @@ async function setupSlack(): Promise<{
   });
 
   console.log(
-    `  Connected to ${identity.value.team} as @${identity.value.botName}\n`,
+    `  Connected to ${identity.value.team} as @${identity.value.botName}`,
   );
+
+  // Slack's install flow can grant fewer scopes than the manifest asked for.
+  // Saying so here is the difference between a two-minute fix and an evening
+  // spent wondering why a healthy-looking bot ignores every message.
+  if (identity.value.missingScopes.length > 0) {
+    console.log("");
+    console.log("  The install did not grant every scope this needs:");
+    for (const { scope, needed } of identity.value.missingScopes) {
+      console.log(`    ${scope} — without it the bot cannot ${needed}`);
+    }
+    console.log("");
+    console.log("  In api.slack.com/apps → your app → OAuth & Permissions:");
+    console.log("  add them under Bot Token Scopes, click Reinstall to");
+    console.log("  Workspace, then run this again with the new token.");
+    console.log("");
+  } else {
+    console.log("");
+  }
 
   const appToken = await promptUntilValid({
     message: "App-Level Token (xapp-...):",

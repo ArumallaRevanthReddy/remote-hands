@@ -16,6 +16,7 @@ export interface RuntimeConfig {
   maxTurns: number;
   mode: Mode;
   approvalTimeoutMs: number;
+  logLevel: "debug" | "info" | "warn" | "error";
   transports: {
     slack: SlackRuntimeConfig | null;
   };
@@ -116,6 +117,21 @@ export async function resolveConfig(
     },
   );
 
+  const logLevel = pick<"debug" | "info" | "warn" | "error">(
+    "logLevel",
+    process.env.RH_LOG_LEVEL,
+    undefined,
+    "info",
+    (raw) => {
+      if (raw !== "debug" && raw !== "info" && raw !== "warn" && raw !== "error") {
+        throw new Error(
+          `RH_LOG_LEVEL must be debug, info, warn or error, got "${raw}".`,
+        );
+      }
+      return raw;
+    },
+  );
+
   return {
     config: {
       anthropicApiKey,
@@ -125,6 +141,7 @@ export async function resolveConfig(
       maxTurns,
       mode,
       approvalTimeoutMs: approvalTimeoutSeconds * 1000,
+      logLevel,
       transports: { slack: resolveSlack(file, sources) },
     },
     sources,

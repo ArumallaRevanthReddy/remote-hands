@@ -89,16 +89,21 @@ export class Dispatcher {
             refusals.push({ tool: event.name, reason: event.reason });
             break;
 
-          case "done":
+          case "done": {
             completed = true;
+            const spoken = said.join("\n\n").trim();
             await reply.complete({
               ok: event.ok,
-              answer: said.join("\n\n").trim() || event.summary.trim(),
+              // On failure the summary is the error, and it is already carried
+              // in `error`. Falling back to it here as well printed the same
+              // sentence twice in the thread.
+              answer: spoken || (event.ok ? event.summary.trim() : ""),
               refusals,
               ...(event.ok ? {} : { error: event.summary }),
               costUsd: event.costUsd,
             });
             break;
+          }
         }
       }
     } catch (error) {

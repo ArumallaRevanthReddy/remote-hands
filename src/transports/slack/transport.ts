@@ -36,7 +36,16 @@ export interface SlackTransportOptions {
   knows: (conversationId: string) => boolean;
   /** How long an approval waits before denying itself. */
   approvalTimeoutMs: number;
+  /** Bolt's log level. `debug` prints every frame Slack sends over the socket. */
+  logLevel?: "debug" | "info" | "warn" | "error";
 }
+
+const LOG_LEVELS = {
+  debug: LogLevel.DEBUG,
+  info: LogLevel.INFO,
+  warn: LogLevel.WARN,
+  error: LogLevel.ERROR,
+} as const;
 
 export class SlackTransport implements Transport {
   readonly name = "slack";
@@ -48,7 +57,7 @@ export class SlackTransport implements Transport {
       token: options.botToken,
       appToken: options.appToken,
       socketMode: true,
-      logLevel: LogLevel.INFO,
+      logLevel: LOG_LEVELS[options.logLevel ?? "info"],
     });
   }
 

@@ -1,3 +1,5 @@
+import { REQUIRED_BOT_SCOPES } from "../transports/slack/manifest.js";
+
 /**
  * Live credential checks.
  *
@@ -54,6 +56,10 @@ export interface SlackIdentity {
   team: string;
   botUserId: string;
   botName: string;
+  /** Scopes the token actually carries, per Slack's x-oauth-scopes header. */
+  grantedScopes: string[];
+  /** Required scopes the install did not grant. Empty when all are present. */
+  missingScopes: Array<{ scope: string; needed: string }>;
 }
 
 /**
@@ -67,11 +73,24 @@ export async function checkSlackBotToken(
   if (!result.ok) return result;
 
   const body = result.body;
+
+  // Read the scopes off the response header rather than trusting the manifest.
+  // A token can authenticate perfectly and still be missing the permission to
+  // receive the events the app depends on.
+  const granted = (result.scopes ?? "")
+    .split(",")
+    .map((scope) => scope.trim())
+    .filter(Boolean);
+
   return {
     ok: true,
     team: typeof body["team"] === "string" ? body["team"] : "unknown workspace",
     botUserId: typeof body["user_id"] === "string" ? body["user_id"] : "",
     botName: typeof body["user"] === "string" ? body["user"] : "the bot",
+    grantedScopes: granted,
+    missingScopes: REQUIRED_BOT_SCOPES.filter(
+      ({ scope }) => !granted.includes(scope),
+    ).map(({ scope, needed }) => ({ scope, needed })),
   };
 }
 
@@ -87,7 +106,7 @@ export async function checkSlackAppToken(token: string): Promise<Check> {
 }
 
 type SlackResult =
-  | { ok: true; body: Record<string, unknown> }
+  | { ok: true; body: Record<string, unknown>; scopes?: string }
   | { ok: false; problem: string };
 
 async function slackCall(method: string, token: string): Promise<SlackResult> {
@@ -102,7 +121,13 @@ async function slackCall(method: string, token: string): Promise<SlackResult> {
     });
 
     const body = (await response.json()) as Record<string, unknown>;
-    if (body["ok"] === true) return { ok: true, body };
+    if (body["ok"] === true) {
+      return {
+        ok: true,
+        body,
+        scopes: response.headers.get("x-oauth-scopes") ?? undefined,
+      };
+    }
 
     return { ok: false, problem: explainSlackError(String(body["error"] ?? "unknown")) };
   } catch (error) {
