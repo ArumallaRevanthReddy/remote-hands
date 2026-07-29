@@ -79,13 +79,22 @@ Nothing in `core/` changes.
 Needs **Node 20 or newer** (`node --version`).
 
 ```sh
-npm install -g git+ssh://git@github.com/ArumallaRevanthReddy/remote-hands.git
+npm install -g --install-links=true \
+  git+ssh://git@github.com/ArumallaRevanthReddy/remote-hands.git
 ```
 
-The SSH form is required while the repository is private — npm's `github:`
-shorthand fetches over HTTPS and will 404 without credentials. TypeScript is
-compiled during install, so the first run may take a few seconds longer than a
-typical package.
+Both parts of that command are load-bearing:
+
+- **`git+ssh://`** rather than npm's `github:` shorthand, which fetches over
+  HTTPS and 404s while the repository is private.
+- **`--install-links=true`**, without which npm symlinks the package to a
+  temporary clone inside its own cache instead of copying it. The install
+  reports success, creates the `remote-hands` symlink, and leaves it dangling
+  the moment that cache entry is cleaned up — so the command is "not found"
+  despite npm having said it worked.
+
+Compiled JavaScript is committed to the repository, so nothing is built on your
+machine during install.
 
 Check it landed:
 
