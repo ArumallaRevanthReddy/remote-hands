@@ -1,8 +1,26 @@
 {
   "name": "remote-hands",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0",
   "description": "A CLI-installable agent that runs on your infrastructure and is driven from Slack.",
+  "keywords": [
+    "slack",
+    "claude",
+    "agent",
+    "devops",
+    "sre",
+    "chatops",
+    "cli"
+  ],
+  "license": "MIT",
+  "author": "Revanth Arumalla <revanthreddy128@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ArumallaRevanthReddy/remote-hands.git"
+  },
+  "homepage": "https://github.com/ArumallaRevanthReddy/remote-hands#readme",
+  "bugs": {
+    "url": "https://github.com/ArumallaRevanthReddy/remote-hands/issues"
+  },
   "type": "module",
   "bin": {
     "remote-hands": "./dist/cli.js"
