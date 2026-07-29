@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import { loadConfig } from "./config.js";
-import { startSlackApp } from "./slack.js";
+import { run } from "./runtime.js";
 
-const USAGE = `remote-hands — a pair of hands on this host, driven from Slack.
+const USAGE = `remote-hands — a pair of hands on this host, driven from chat.
 
 Usage:
-  remote-hands start     Connect to Slack and start listening
+  remote-hands start     Connect configured integrations and start listening
   remote-hands --help    Show this message
 
 Configuration comes from the environment; see .env.example.
@@ -25,8 +25,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const config = loadConfig();
-  await startSlackApp(config);
+  await run(loadConfig());
 }
 
 main().catch((error: unknown) => {

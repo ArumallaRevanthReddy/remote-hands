@@ -2,8 +2,9 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 /**
- * Maps a Slack thread to an agent session, so replying in a thread continues
- * the same conversation instead of starting a new one.
+ * Maps a conversation to an agent session, so a follow-up continues the same
+ * conversation instead of starting a new one. Keys are transport-namespaced
+ * (`slack:C012AB:1699999.0001`), so two integrations cannot collide.
  *
  * Two things worth knowing about the underlying sessions:
  *
@@ -38,13 +39,13 @@ export class SessionStore {
     return store;
   }
 
-  get(threadTs: string): string | undefined {
-    return this.map.get(threadTs);
+  get(conversationId: string): string | undefined {
+    return this.map.get(conversationId);
   }
 
-  async set(threadTs: string, sessionId: string): Promise<void> {
-    if (this.map.get(threadTs) === sessionId) return;
-    this.map.set(threadTs, sessionId);
+  async set(conversationId: string, sessionId: string): Promise<void> {
+    if (this.map.get(conversationId) === sessionId) return;
+    this.map.set(conversationId, sessionId);
     await this.flush();
   }
 

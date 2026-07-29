@@ -42,15 +42,55 @@ Slack thread  ──►  remote-hands (your host)  ──►  AWS / anything els
 
 The [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk) supplies the
 agent loop, the built-in shell and file tools, skill loading, and session
-resumption. This repo is the part around it: the Slack bridge, the mapping from
-threads to sessions, the approval gate, and the skills themselves.
+resumption. This repo is the part around it: the chat integrations, the mapping
+from conversations to sessions, the permission policy, and the skills.
 
 Model: `claude-opus-5`.
 
+## Layout
+
+```
+src/
+  core/          agent loop, permission policy, sessions, dispatch
+  transports/    integrations — Slack today, others later
+  runtime.ts     wires configured integrations to one dispatcher
+```
+
+`core/` knows nothing about any chat product. It emits semantic events —
+"running this tool", "refused that", "here is the answer in CommonMark" — and
+each transport decides how to render them. Slack gets mrkdwn with an editable
+status message; a future SMS integration would drop progress updates entirely
+and send only the answer. Formatting lives at the edge, not in the middle.
+
+### Adding an integration
+
+1. Implement `Transport` from `src/transports/types.ts` — `start(handler)` and
+   `stop()`.
+2. Give each conversation a stable id namespaced by transport
+   (`discord:<guild>:<thread>`). It maps 1:1 to an agent session, so it must not
+   change over the conversation's life.
+3. Implement `ReplyChannel` to render `progress` and `complete`.
+4. Add a config key and a case in `buildTransports`.
+
+Nothing in `core/` changes.
+
+## Running it
+
+```sh
+npm install
+cp .env.example .env    # fill in tokens
+npm run dev             # or: npm run build && remote-hands start
+npm test
+```
+
+Slack runs in Socket Mode, so the host needs no public URL or inbound firewall
+rule — it dials out.
+
 ## Status
 
-Early. Nothing is built yet beyond this README — the architecture above is the
-plan, not a description of working code.
+Early, and read-only by design. It can inspect and explain; it cannot change
+anything. Subagents, long-running loops, and the write path with an approval
+gate come next.
 
 ## License
 
