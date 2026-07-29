@@ -79,18 +79,8 @@ Nothing in `core/` changes.
 Needs **Node 20 or newer** (`node --version`).
 
 ```sh
-npm install -g --install-links=true \
-  git+https://github.com/ArumallaRevanthReddy/remote-hands.git
+npm install -g remote-hands
 ```
-
-`--install-links=true` is load-bearing. Without it npm symlinks the package to
-a temporary clone inside its own cache rather than copying it: the install
-reports success, creates the `remote-hands` symlink, and leaves it dangling the
-moment that cache entry is cleaned up — so the command comes back "not found"
-despite npm having said it worked.
-
-Compiled JavaScript is committed, so nothing is built on your machine during
-install.
 
 Check it landed:
 
@@ -102,18 +92,23 @@ If the command isn't found, npm's global `bin` directory isn't on your `PATH`.
 `npm prefix -g` prints the location; add its `bin` subdirectory.
 
 <details>
-<summary>Installing from a local clone instead</summary>
+<summary>Installing from source instead</summary>
 
 ```sh
-git clone git@github.com:ArumallaRevanthReddy/remote-hands.git
+git clone https://github.com/ArumallaRevanthReddy/remote-hands.git
 cd remote-hands
-npm install        # builds automatically
+npm install
+npm run build
 npm link           # puts `remote-hands` on your PATH, pointed at this checkout
 ```
 
 `npm link` is the one to use while changing the code — the command tracks your
-working copy. Run `npm run build` after edits, or use `npm run dev -- start` to
-skip the build step entirely.
+working copy. Run `npm run build` after edits, or `npm run dev -- start` to run
+straight from TypeScript and skip the build.
+
+Installing directly from the git URL also works, but needs
+`--install-links=true`; without it npm symlinks the package into its own clone
+cache and the command breaks as soon as that cache is swept.
 </details>
 
 To remove it: `npm uninstall -g remote-hands` (or `npm unlink -g remote-hands`
@@ -212,10 +207,19 @@ it belonged to reports the request as gone rather than running it.
 ## Development
 
 ```sh
-npm install          # builds via the prepare script
+npm install
 npm test
 npm run typecheck
+npm run build         # dist/ is gitignored; prepack rebuilds it on publish
 npm run dev -- start  # run from source, no build step
+```
+
+Releasing:
+
+```sh
+npm version patch     # or minor/major — commits and tags
+npm publish           # prepack compiles dist/ into the tarball
+git push --follow-tags
 ```
 
 ## Approvals

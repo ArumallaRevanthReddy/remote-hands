@@ -11,6 +11,7 @@
 *~
 
 # Node
+dist/
 node_modules/
 build/
 *.tsbuildinfo
