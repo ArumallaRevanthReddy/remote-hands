@@ -74,6 +74,46 @@ and send only the answer. Formatting lives at the edge, not in the middle.
 
 Nothing in `core/` changes.
 
+## Install
+
+Needs **Node 20 or newer** (`node --version`).
+
+```sh
+npm install -g git+ssh://git@github.com/ArumallaRevanthReddy/remote-hands.git
+```
+
+The SSH form is required while the repository is private — npm's `github:`
+shorthand fetches over HTTPS and will 404 without credentials. TypeScript is
+compiled during install, so the first run may take a few seconds longer than a
+typical package.
+
+Check it landed:
+
+```sh
+remote-hands --help
+```
+
+If the command isn't found, npm's global `bin` directory isn't on your `PATH`.
+`npm prefix -g` prints the location; add its `bin` subdirectory.
+
+<details>
+<summary>Installing from a local clone instead</summary>
+
+```sh
+git clone git@github.com:ArumallaRevanthReddy/remote-hands.git
+cd remote-hands
+npm install        # builds automatically
+npm link           # puts `remote-hands` on your PATH, pointed at this checkout
+```
+
+`npm link` is the one to use while changing the code — the command tracks your
+working copy. Run `npm run build` after edits, or use `npm run dev -- start` to
+skip the build step entirely.
+</details>
+
+To remove it: `npm uninstall -g remote-hands` (or `npm unlink -g remote-hands`
+for a linked checkout).
+
 ## Getting started
 
 ```sh
@@ -133,12 +173,44 @@ systemd unit can be configured without ever running `init`:
 `doctor` reports which source each value came from, because an environment
 variable quietly shadowing the config file is a confusing way to lose an hour.
 
+## Keeping it running
+
+`remote-hands start` runs in the foreground and stops when the terminal closes.
+On a server, run it under a supervisor:
+
+```ini
+# /etc/systemd/system/remote-hands.service
+[Unit]
+Description=remote-hands
+After=network-online.target
+
+[Service]
+User=remote-hands
+ExecStart=/usr/bin/remote-hands start
+Restart=always
+RestartSec=5
+# Credentials can come from the environment instead of the config file.
+EnvironmentFile=/etc/remote-hands/env
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```sh
+sudo systemctl enable --now remote-hands
+journalctl -u remote-hands -f
+```
+
+Restarting abandons any approval still awaiting a click, and the conversation
+it belonged to reports the request as gone rather than running it.
+
 ## Development
 
 ```sh
-npm install
+npm install          # builds via the prepare script
 npm test
-npm run dev -- start
+npm run typecheck
+npm run dev -- start  # run from source, no build step
 ```
 
 ## Approvals

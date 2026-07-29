@@ -10,11 +10,15 @@
   "engines": {
     "node": ">=20"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
-    "dev": "tsx src/cli.ts start",
+    "dev": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test test/*.test.ts"
+    "test": "node --import tsx --test test/*.test.ts",
+    "prepare": "npm run build"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.220",
