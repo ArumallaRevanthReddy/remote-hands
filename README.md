@@ -80,21 +80,17 @@ Needs **Node 20 or newer** (`node --version`).
 
 ```sh
 npm install -g --install-links=true \
-  git+ssh://git@github.com/ArumallaRevanthReddy/remote-hands.git
+  git+https://github.com/ArumallaRevanthReddy/remote-hands.git
 ```
 
-Both parts of that command are load-bearing:
+`--install-links=true` is load-bearing. Without it npm symlinks the package to
+a temporary clone inside its own cache rather than copying it: the install
+reports success, creates the `remote-hands` symlink, and leaves it dangling the
+moment that cache entry is cleaned up — so the command comes back "not found"
+despite npm having said it worked.
 
-- **`git+ssh://`** rather than npm's `github:` shorthand, which fetches over
-  HTTPS and 404s while the repository is private.
-- **`--install-links=true`**, without which npm symlinks the package to a
-  temporary clone inside its own cache instead of copying it. The install
-  reports success, creates the `remote-hands` symlink, and leaves it dangling
-  the moment that cache entry is cleaned up — so the command is "not found"
-  despite npm having said it worked.
-
-Compiled JavaScript is committed to the repository, so nothing is built on your
-machine during install.
+Compiled JavaScript is committed, so nothing is built on your machine during
+install.
 
 Check it landed:
 
