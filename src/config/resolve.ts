@@ -1,0 +1,152 @@
+import { resolve as resolvePath } from "node:path";
+import { defaultStatePath, defaultWorkspace } from "./paths.js";
+import { readStoredConfig, type StoredConfig } from "./store.js";
+
+export interface SlackRuntimeConfig {
+  botToken: string;
+  appToken: string;
+}
+
+export interface RuntimeConfig {
+  anthropicApiKey: string;
+  workspace: string;
+  statePath: string;
+  model: string;
+  maxTurns: number;
+  transports: {
+    slack: SlackRuntimeConfig | null;
+  };
+}
+
+/** Where a value came from, so `doctor` can explain what is actually in effect. */
+export type Source = "env" | "config" | "default";
+export type Sources = Record<string, Source>;
+
+export interface Resolution {
+  config: RuntimeConfig;
+  sources: Sources;
+}
+
+/**
+ * Environment beats the config file, which beats defaults.
+ *
+ * That ordering is what lets one binary serve both cases: `init` writes a
+ * config file for a laptop or a long-lived box, while a container sets
+ * environment variables and never runs `init` at all.
+ */
+export async function resolveConfig(
+  stored?: StoredConfig,
+): Promise<Resolution> {
+  const file = stored ?? (await readStoredConfig());
+  const sources: Sources = {};
+
+  const pick = <T>(
+    key: string,
+    fromEnv: string | undefined,
+    fromFile: T | undefined,
+    fallback: T,
+    parse: (raw: string) => T = (raw) => raw as unknown as T,
+  ): T => {
+    if (fromEnv !== undefined && fromEnv !== "") {
+      sources[key] = "env";
+      return parse(fromEnv);
+    }
+    if (fromFile !== undefined) {
+      sources[key] = "config";
+      return fromFile;
+    }
+    sources[key] = "default";
+    return fallback;
+  };
+
+  const anthropicApiKey = pick(
+    "anthropicApiKey",
+    process.env.ANTHROPIC_API_KEY,
+    file.anthropicApiKey,
+    "",
+  );
+
+  const workspace = resolvePath(
+    pick("workspace", process.env.RH_WORKSPACE, file.workspace, defaultWorkspace()),
+  );
+
+  const statePath = resolvePath(
+    pick("statePath", process.env.RH_STATE, undefined, defaultStatePath()),
+  );
+
+  const model = pick("model", process.env.RH_MODEL, file.model, "claude-opus-5");
+
+  const maxTurns = pick(
+    "maxTurns",
+    process.env.RH_MAX_TURNS,
+    file.maxTurns,
+    30,
+    (raw) => {
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        throw new Error(`RH_MAX_TURNS must be a positive number, got "${raw}".`);
+      }
+      return parsed;
+    },
+  );
+
+  return {
+    config: {
+      anthropicApiKey,
+      workspace,
+      statePath,
+      model,
+      maxTurns,
+      transports: { slack: resolveSlack(file, sources) },
+    },
+    sources,
+  };
+}
+
+function resolveSlack(file: StoredConfig, sources: Sources): SlackRuntimeConfig | null {
+  const envBot = process.env.SLACK_BOT_TOKEN;
+  const envApp = process.env.SLACK_APP_TOKEN;
+  const stored = file.transports?.slack;
+
+  // Env is all-or-nothing for a transport: mixing a token from the environment
+  // with one from the file would silently pair credentials from two different
+  // Slack apps, which fails in a way nobody would think to look for.
+  if (envBot || envApp) {
+    if (!envBot || !envApp) {
+      throw new Error(
+        "Slack needs both SLACK_BOT_TOKEN and SLACK_APP_TOKEN in the " +
+          "environment; only one is set.",
+      );
+    }
+    sources["slack"] = "env";
+    return { botToken: envBot, appToken: envApp };
+  }
+
+  if (stored?.botToken && stored.appToken) {
+    sources["slack"] = "config";
+    return { botToken: stored.botToken, appToken: stored.appToken };
+  }
+
+  return null;
+}
+
+/** Human-readable explanation of what is missing before `start` can run. */
+export function describeGaps(config: RuntimeConfig): string[] {
+  const gaps: string[] = [];
+
+  if (!config.anthropicApiKey) {
+    gaps.push(
+      "No Anthropic API key. Run `remote-hands init`, or set ANTHROPIC_API_KEY.",
+    );
+  }
+
+  const enabled = Object.values(config.transports).filter(Boolean);
+  if (enabled.length === 0) {
+    gaps.push(
+      "No chat integration configured. Run `remote-hands init`, or set " +
+        "SLACK_BOT_TOKEN and SLACK_APP_TOKEN.",
+    );
+  }
+
+  return gaps;
+}

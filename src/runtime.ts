@@ -1,4 +1,4 @@
-import type { Config } from "./config.js";
+import type { RuntimeConfig } from "./config/resolve.js";
 import { Dispatcher } from "./core/dispatcher.js";
 import { SessionStore } from "./core/sessions.js";
 import { SlackTransport } from "./transports/slack/transport.js";
@@ -9,7 +9,14 @@ import type { Transport } from "./transports/types.js";
  * dispatcher. Adding an integration is a case in `buildTransports` plus a
  * config key — nothing in core changes.
  */
-export async function run(config: Config): Promise<void> {
+export async function run(config: RuntimeConfig): Promise<void> {
+  // The Agent SDK reads the key from the environment. When it came from the
+  // config file instead, put it there so the SDK finds it — without this, a
+  // key that `doctor` reports as fine still fails at the first request.
+  if (config.anthropicApiKey && !process.env.ANTHROPIC_API_KEY) {
+    process.env.ANTHROPIC_API_KEY = config.anthropicApiKey;
+  }
+
   const sessions = await SessionStore.open(config.statePath);
   const dispatcher = new Dispatcher(sessions, {
     workspace: config.workspace,
@@ -45,7 +52,10 @@ export async function run(config: Config): Promise<void> {
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 }
 
-function buildTransports(config: Config, sessions: SessionStore): Transport[] {
+function buildTransports(
+  config: RuntimeConfig,
+  sessions: SessionStore,
+): Transport[] {
   const transports: Transport[] = [];
 
   if (config.transports.slack) {

@@ -74,17 +74,70 @@ and send only the answer. Formatting lives at the edge, not in the middle.
 
 Nothing in `core/` changes.
 
-## Running it
+## Getting started
+
+```sh
+remote-hands init     # asks for an API key and sets up Slack
+remote-hands start
+```
+
+`init` asks two things: an Anthropic API key, and which chat medium to use
+(Slack is the only one built). Both are validated against the live APIs before
+anything is written, so a mistyped token fails during setup rather than at 2am
+in a thread.
+
+For Slack it prints an **app manifest**. Creating the app by hand is a dozen
+clicks across four settings pages, and the usual mistake — a missing
+`*:history` scope — produces an app that installs cleanly, connects cleanly,
+and then never receives a message. Pasting the manifest makes every scope and
+event correct by construction.
+
+Slack runs in Socket Mode, so the host needs no public URL and no inbound
+firewall rule — it dials out.
+
+Other commands:
+
+```sh
+remote-hands doctor        # re-check everything; first thing to run when it breaks
+remote-hands config path   # where the config file lives
+```
+
+## Configuration
+
+Config is written to `~/.remote-hands/config.json`, mode `0600`.
+
+That's your own file — you can read it, edit it, and copy it to another host.
+`0600` keeps *other users on the machine* out; it isn't hiding anything from
+you. Fixing a rotated token by editing that file is a supported workflow, which
+is why `config path` exists.
+
+It deliberately lives in your home directory rather than next to the code:
+`npm update -g` replaces the install directory wholesale, that directory is
+often root-owned, and config in a project folder is one `git add -A` away from
+being committed.
+
+**Environment variables take precedence over the file**, so a container or
+systemd unit can be configured without ever running `init`:
+
+| Variable | Overrides |
+|---|---|
+| `ANTHROPIC_API_KEY` | The API key (nothing sensitive is written to disk if you use this) |
+| `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN` | Slack credentials — set both or neither |
+| `RH_WORKSPACE` | Where the agent works |
+| `RH_MODEL` | Default `claude-opus-5` |
+| `RH_MAX_TURNS` | Tool-use round trips per message, default 30 |
+| `RH_CONFIG_DIR` | Where config lives, default `~/.remote-hands` |
+
+`doctor` reports which source each value came from, because an environment
+variable quietly shadowing the config file is a confusing way to lose an hour.
+
+## Development
 
 ```sh
 npm install
-cp .env.example .env    # fill in tokens
-npm run dev             # or: npm run build && remote-hands start
 npm test
+npm run dev -- start
 ```
-
-Slack runs in Socket Mode, so the host needs no public URL or inbound firewall
-rule — it dials out.
 
 ## Status
 
