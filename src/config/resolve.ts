@@ -1,4 +1,5 @@
 import { resolve as resolvePath } from "node:path";
+import type { Mode } from "../core/guard.js";
 import { defaultStatePath, defaultWorkspace } from "./paths.js";
 import { readStoredConfig, type StoredConfig } from "./store.js";
 
@@ -13,6 +14,8 @@ export interface RuntimeConfig {
   statePath: string;
   model: string;
   maxTurns: number;
+  mode: Mode;
+  approvalTimeoutMs: number;
   transports: {
     slack: SlackRuntimeConfig | null;
   };
@@ -90,6 +93,29 @@ export async function resolveConfig(
     },
   );
 
+  const mode = pick<Mode>("mode", process.env.RH_MODE, file.mode, "approval", (raw) => {
+    if (raw !== "readonly" && raw !== "approval") {
+      throw new Error(`RH_MODE must be "readonly" or "approval", got "${raw}".`);
+    }
+    return raw;
+  });
+
+  const approvalTimeoutSeconds = pick(
+    "approvalTimeout",
+    process.env.RH_APPROVAL_TIMEOUT,
+    file.approvalTimeoutSeconds,
+    300,
+    (raw) => {
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        throw new Error(
+          `RH_APPROVAL_TIMEOUT must be a positive number of seconds, got "${raw}".`,
+        );
+      }
+      return parsed;
+    },
+  );
+
   return {
     config: {
       anthropicApiKey,
@@ -97,6 +123,8 @@ export async function resolveConfig(
       statePath,
       model,
       maxTurns,
+      mode,
+      approvalTimeoutMs: approvalTimeoutSeconds * 1000,
       transports: { slack: resolveSlack(file, sources) },
     },
     sources,

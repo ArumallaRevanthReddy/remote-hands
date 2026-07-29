@@ -16,6 +16,10 @@ export interface StoredConfig {
   workspace?: string;
   model?: string;
   maxTurns?: number;
+  /** "approval" asks before changing anything; "readonly" refuses instead. */
+  mode?: "readonly" | "approval";
+  /** How long an approval waits for a click before denying itself. */
+  approvalTimeoutSeconds?: number;
   transports?: {
     slack?: StoredSlackConfig;
   };

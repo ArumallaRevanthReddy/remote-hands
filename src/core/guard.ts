@@ -1,14 +1,23 @@
 /**
- * Slice 1 policy: the agent may look, but not touch.
+ * Decides whether a tool call runs, is refused, or needs a human.
  *
- * This is a speed bump, not a security boundary. A determined prompt injection
- * can probably find a read-only-looking command with a side effect. The real
- * boundary is the IAM role on the host — scope it to read-only and this layer
- * becomes defence in depth rather than the only defence.
- *
- * Slice 2 replaces the `deny` outcome with an approval prompt in the Slack
- * thread, which is why this returns a reason string rather than a bare boolean.
+ * The allowlist below is not a security boundary. A determined prompt injection
+ * can probably find a read-only-looking command with a side effect, and the
+ * allowlist only decides what runs *without asking*. The real boundary is the
+ * IAM role on the host — scope it to what the agent should be able to reach and
+ * this layer becomes defence in depth rather than the only defence.
  */
+
+export type Mode =
+  /** Inspect only. Anything else is refused outright. */
+  | "readonly"
+  /** Inspect freely; anything that could change state asks a human first. */
+  | "approval";
+
+export type Verdict =
+  | { verdict: "allow" }
+  | { verdict: "ask"; reason: string }
+  | { verdict: "deny"; reason: string };
 
 /** Tools that cannot change anything, so they never need a decision. */
 export const READ_ONLY_TOOLS = [
@@ -19,7 +28,7 @@ export const READ_ONLY_TOOLS = [
   "WebFetch",
 ] as const;
 
-/** Tools that exist to mutate state. Not available in slice 1. */
+/** Tools whose whole purpose is to change something. */
 export const MUTATING_TOOLS = [
   "Write",
   "Edit",
@@ -28,8 +37,8 @@ export const MUTATING_TOOLS = [
 ] as const;
 
 /**
- * Command prefixes considered read-only. Matched against the start of the
- * command, so `aws s3 ls` matches `aws s3 ls` but `aws s3 rm` matches nothing.
+ * Command prefixes considered read-only. Matched against the start of a
+ * command, so `aws s3 ls` matches and `aws s3 rm` does not.
  */
 const READ_ONLY_COMMANDS: RegExp[] = [
   // AWS: the read verbs, which is nearly all of the investigative surface.
@@ -40,74 +49,105 @@ const READ_ONLY_COMMANDS: RegExp[] = [
   // Kubernetes
   /^kubectl\s+(get|describe|logs|top|explain|api-resources|version)\b/,
   // Local inspection
-  /^(ls|cat|head|tail|wc|stat|file|find|grep|rg|sed\s+-n|awk|jq|yq)\b/,
-  /^(df|du|free|uptime|whoami|hostname|date|id|env|printenv)\b/,
-  /^(ps|top\s+-b|systemctl\s+status|journalctl)\b/,
-  /^git\s+(status|log|diff|show|branch|remote|rev-parse|describe)\b/,
+  /^(ls|cat|head|tail|wc|stat|file|find|grep|rg|sort|uniq|cut|awk|jq|yq|column)\b/,
+  /^sed\s+-n\b/,
+  /^(df|du|free|uptime|whoami|hostname|date|id|env|printenv|which|type)\b/,
+  /^(ps|systemctl\s+status|journalctl)\b/,
+  /^git\s+(status|log|diff|show|branch|remote|rev-parse|describe|blame)\b/,
   /^(docker|podman)\s+(ps|images|logs|inspect|stats)\b/,
   /^(terraform|tofu)\s+(show|output|state\s+(list|show)|validate|plan)\b/,
   /^(curl|http)\s+(-[a-zA-Z]+\s+)*(-X\s+GET\s+)?https?:\/\//,
 ];
 
 /**
- * Shell syntax that can smuggle a second command past a prefix match.
- * Backticks, $(), redirects, chaining, and background execution.
+ * Shell syntax that makes a command impossible to classify from its prefix:
+ * chaining, substitution, redirection, background execution.
+ *
+ * A single `|` is deliberately absent — pipelines are handled below by checking
+ * every stage, since `kubectl get pods | grep web` is both extremely common and
+ * genuinely read-only.
  */
-const CHAINING = /[;&|`>]|\$\(|\|\||&&|\n/;
+const UNCLASSIFIABLE = /[;&`\n]|\$\(|\|\||&&|>|<(?!\s*\/dev\/null)/;
 
-export type Decision =
-  | { allow: true }
-  | { allow: false; reason: string };
-
-export function judgeBashCommand(rawCommand: string): Decision {
+export function judgeBashCommand(rawCommand: string, mode: Mode): Verdict {
   const command = rawCommand.trim();
 
   if (!command) {
-    return { allow: false, reason: "Empty command." };
+    return { verdict: "deny", reason: "Empty command." };
   }
 
-  if (CHAINING.test(command)) {
+  if (isReadOnly(command)) {
+    return { verdict: "allow" };
+  }
+
+  if (mode === "readonly") {
     return {
-      allow: false,
+      verdict: "deny",
       reason:
-        "Chained or redirected commands are not allowed while read-only. " +
-        "Run one command at a time.",
+        "This build is read-only, and that command is not on the inspection " +
+        "allowlist.",
     };
   }
 
-  const matched = READ_ONLY_COMMANDS.some((pattern) => pattern.test(command));
-  if (!matched) {
-    return {
-      allow: false,
-      reason:
-        `\`${command.split(/\s+/).slice(0, 3).join(" ")}\` is not on the ` +
-        "read-only allowlist. This build can inspect but not change anything.",
-    };
-  }
-
-  return { allow: true };
+  return { verdict: "ask", reason: "This command could change something." };
 }
 
-export function judgeTool(toolName: string, input: unknown): Decision {
-  if ((READ_ONLY_TOOLS as readonly string[]).includes(toolName)) {
-    return { allow: true };
-  }
+function isReadOnly(command: string): boolean {
+  if (UNCLASSIFIABLE.test(command)) return false;
 
-  if ((MUTATING_TOOLS as readonly string[]).includes(toolName)) {
-    return {
-      allow: false,
-      reason: `${toolName} changes state and is disabled in this build.`,
-    };
+  // Every stage of a pipeline must be read-only on its own; `ls | tee f`
+  // fails here because `tee` writes.
+  return command
+    .split("|")
+    .map((stage) => stage.trim())
+    .every(
+      (stage) =>
+        stage.length > 0 && READ_ONLY_COMMANDS.some((rule) => rule.test(stage)),
+    );
+}
+
+export function judgeTool(
+  toolName: string,
+  input: unknown,
+  mode: Mode,
+): Verdict {
+  if ((READ_ONLY_TOOLS as readonly string[]).includes(toolName)) {
+    return { verdict: "allow" };
   }
 
   if (toolName === "Bash" || toolName === "BashOutput") {
-    const command =
-      typeof input === "object" && input !== null && "command" in input
-        ? String((input as { command: unknown }).command ?? "")
-        : "";
-    return judgeBashCommand(command);
+    return judgeBashCommand(readString(input, "command"), mode);
   }
 
-  // Unrecognised tool: refuse rather than assume it is harmless.
-  return { allow: false, reason: `${toolName} is not enabled in this build.` };
+  if ((MUTATING_TOOLS as readonly string[]).includes(toolName)) {
+    if (mode === "readonly") {
+      return {
+        verdict: "deny",
+        reason: `${toolName} changes state, and this build is read-only.`,
+      };
+    }
+    return { verdict: "ask", reason: `${toolName} will change a file.` };
+  }
+
+  // An unrecognised tool is not assumed harmless. In readonly mode that means
+  // refusing; with a human available, it means asking them.
+  if (mode === "readonly") {
+    return { verdict: "deny", reason: `${toolName} is not enabled in this build.` };
+  }
+  return { verdict: "ask", reason: `${toolName} is not on the known-safe list.` };
+}
+
+/** Best-effort one-line subject of a tool call, for showing a human. */
+export function describeToolInput(input: unknown): string {
+  for (const key of ["command", "file_path", "path", "pattern", "url"]) {
+    const value = readString(input, key);
+    if (value) return value;
+  }
+  return "";
+}
+
+function readString(input: unknown, key: string): string {
+  if (typeof input !== "object" || input === null) return "";
+  const value = (input as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : "";
 }

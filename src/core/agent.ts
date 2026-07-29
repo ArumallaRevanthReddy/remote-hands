@@ -3,7 +3,8 @@ import {
   type CanUseTool,
   type Options,
 } from "@anthropic-ai/claude-agent-sdk";
-import { MUTATING_TOOLS, READ_ONLY_TOOLS, judgeTool } from "./guard.js";
+import { READ_ONLY_TOOLS, describeToolInput, judgeTool, type Mode } from "./guard.js";
+import type { ApprovalDecision, ApprovalRequest } from "./types.js";
 
 export type AgentEvent =
   | { kind: "session"; sessionId: string }
@@ -14,46 +15,94 @@ export type AgentEvent =
 
 export interface TurnInput {
   prompt: string;
-  /** Session to continue, if this Slack thread already has one. */
+  /** Session to continue, if this conversation already has one. */
   resume?: string;
   workspace: string;
   model: string;
   maxTurns: number;
+  mode: Mode;
+  /** Asks a person to decide. Blocks the agent until it settles. */
+  approve: (request: ApprovalRequest) => Promise<ApprovalDecision>;
 }
 
-const SYSTEM_APPEND = [
-  "You are operating as a remote pair of hands on a server, driven from Slack.",
-  "The person asking is on their phone and cannot see your terminal — everything",
-  "they know comes from what you write back.",
-  "",
-  "This build is READ-ONLY. You can inspect, query, and explain, but any command",
-  "that would change state will be refused. Do not try to work around a refusal;",
-  "report what you would need to do and let the person decide.",
-  "",
-  "Lead with the finding. Put the answer in the first sentence, then supporting",
-  "detail. Skip narration of routine steps — they cannot see them and do not",
-  "need them.",
-].join("\n");
+function systemPrompt(mode: Mode): string {
+  const shared = [
+    "You are operating as a remote pair of hands on a server, driven from chat.",
+    "The person asking is probably on their phone and cannot see your terminal —",
+    "everything they know comes from what you write back.",
+    "",
+    "Lead with the finding. Put the answer in the first sentence, then supporting",
+    "detail. Skip narration of routine steps; they cannot see them and do not",
+    "need them.",
+  ];
+
+  if (mode === "readonly") {
+    return [
+      ...shared,
+      "",
+      "This build is READ-ONLY. You can inspect, query, and explain, but any",
+      "command that would change state will be refused. Do not try to work around",
+      "a refusal — report what you would need to do and let the person decide.",
+    ].join("\n");
+  }
+
+  return [
+    ...shared,
+    "",
+    "Inspection runs freely. Anything that could change state — writing a file,",
+    "or a command that is not plainly read-only — is shown to the person for",
+    "approval before it runs, so expect a pause and do not treat it as failure.",
+    "",
+    "Because a human reads each of those, make them easy to judge: prefer one",
+    "specific command over a broad one, avoid chaining several actions into a",
+    "single call, and say what you are about to do before you do it. If a request",
+    "is denied, do not look for another route to the same effect — explain what",
+    "you wanted to do and why, and let them decide.",
+  ].join("\n");
+}
 
 /**
- * Runs one Slack message through the agent, yielding events as they happen.
+ * Runs one incoming message through the agent, yielding events as they happen.
  *
  * Bash is deliberately absent from `allowedTools`: tools listed there are
- * auto-approved and never reach `canUseTool`, which is where the read-only
- * policy lives. Leaving Bash out is what routes it through the guard.
+ * auto-approved and never reach `canUseTool`, which is where the policy lives.
+ * Leaving Bash out is what routes it through the guard.
  */
 export async function* runTurn(input: TurnInput): AsyncGenerator<AgentEvent> {
-  // canUseTool is a callback, not part of the stream, so denials land here and
+  // canUseTool is a callback, not part of the stream, so refusals land here and
   // get drained into the event stream on the next iteration.
   const pendingDenials: Array<{ name: string; reason: string }> = [];
 
   const canUseTool: CanUseTool = async (toolName, toolInput) => {
-    const decision = judgeTool(toolName, toolInput);
-    if (decision.allow) {
+    const judgement = judgeTool(toolName, toolInput, input.mode);
+
+    if (judgement.verdict === "allow") {
       return { behavior: "allow", updatedInput: toolInput };
     }
-    pendingDenials.push({ name: toolName, reason: decision.reason });
-    return { behavior: "deny", message: decision.reason };
+
+    if (judgement.verdict === "deny") {
+      pendingDenials.push({ name: toolName, reason: judgement.reason });
+      return { behavior: "deny", message: judgement.reason };
+    }
+
+    // Blocks here until a person answers, or the transport times out. The
+    // agent is idle for the duration; the dispatcher's per-conversation
+    // serialisation keeps a second message from racing this one.
+    const decision = await input.approve({
+      tool: toolName,
+      detail: describeToolInput(toolInput),
+      reason: judgement.reason,
+    });
+
+    if (decision.approved) {
+      return { behavior: "allow", updatedInput: toolInput };
+    }
+
+    const message =
+      decision.message ??
+      (decision.by ? `Denied by ${decision.by}.` : "Denied.");
+    pendingDenials.push({ name: toolName, reason: message });
+    return { behavior: "deny", message };
   };
 
   const options: Options = {
@@ -61,7 +110,6 @@ export async function* runTurn(input: TurnInput): AsyncGenerator<AgentEvent> {
     cwd: input.workspace,
     maxTurns: input.maxTurns,
     allowedTools: [...READ_ONLY_TOOLS],
-    disallowedTools: [...MUTATING_TOOLS],
     permissionMode: "default",
     canUseTool,
     // Load .claude/skills, .claude/agents and CLAUDE.md from the workspace.
@@ -69,7 +117,7 @@ export async function* runTurn(input: TurnInput): AsyncGenerator<AgentEvent> {
     systemPrompt: {
       type: "preset",
       preset: "claude_code",
-      append: SYSTEM_APPEND,
+      append: systemPrompt(input.mode),
     },
     ...(input.resume ? { resume: input.resume } : {}),
   };
@@ -100,7 +148,7 @@ export async function* runTurn(input: TurnInput): AsyncGenerator<AgentEvent> {
               yield {
                 kind: "tool",
                 name: block.name,
-                detail: describeToolUse(block.input),
+                detail: truncate(describeToolInput(block.input)),
               };
             }
           }
@@ -109,10 +157,7 @@ export async function* runTurn(input: TurnInput): AsyncGenerator<AgentEvent> {
 
         case "result": {
           yield* drainDenials();
-          yield {
-            kind: "session",
-            sessionId: message.session_id,
-          };
+          yield { kind: "session", sessionId: message.session_id };
           yield {
             kind: "done",
             ok: message.subtype === "success",
@@ -129,7 +174,7 @@ export async function* runTurn(input: TurnInput): AsyncGenerator<AgentEvent> {
   } catch (error) {
     // A single-shot query() throws after yielding an error result, so anything
     // caught here is either that or a process-level failure. Either way the
-    // thread needs to hear about it rather than going silent.
+    // conversation needs to hear about it rather than going silent.
     yield* drainDenials();
     yield {
       kind: "done",
@@ -140,12 +185,6 @@ export async function* runTurn(input: TurnInput): AsyncGenerator<AgentEvent> {
   }
 }
 
-/** One-line description of a tool call, for the Slack activity line. */
-function describeToolUse(toolInput: unknown): string {
-  if (typeof toolInput !== "object" || toolInput === null) return "";
-  const record = toolInput as Record<string, unknown>;
-  const candidate =
-    record["command"] ?? record["file_path"] ?? record["pattern"] ?? record["url"];
-  if (typeof candidate !== "string") return "";
-  return candidate.length > 120 ? `${candidate.slice(0, 117)}...` : candidate;
+function truncate(text: string, limit = 120): string {
+  return text.length > limit ? `${text.slice(0, limit - 3)}...` : text;
 }

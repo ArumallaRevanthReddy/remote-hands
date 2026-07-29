@@ -1,13 +1,28 @@
 import pkg from "@slack/bolt";
 const { App, LogLevel } = pkg;
 import type { WebClient } from "@slack/web-api";
-import type { Activity, TurnOutcome } from "../../core/types.js";
+import type {
+  Activity,
+  ApprovalDecision,
+  ApprovalRequest,
+  TurnOutcome,
+} from "../../core/types.js";
 import type {
   IncomingMessage,
   MessageHandler,
   ReplyChannel,
   Transport,
 } from "../types.js";
+import { ApprovalRegistry, type PendingApproval } from "./approvals.js";
+import {
+  APPROVE_ACTION,
+  DENY_ACTION,
+  approvalBlocks,
+  approvalFallback,
+  headline,
+  resolvedBlocks,
+  type Resolution,
+} from "./blocks.js";
 import { splitMessage, toMrkdwn } from "./mrkdwn.js";
 
 export interface SlackTransportOptions {
@@ -19,11 +34,14 @@ export interface SlackTransportOptions {
    * by the persisted session store — keeps working across restarts.
    */
   knows: (conversationId: string) => boolean;
+  /** How long an approval waits before denying itself. */
+  approvalTimeoutMs: number;
 }
 
 export class SlackTransport implements Transport {
   readonly name = "slack";
   private readonly app: InstanceType<typeof App>;
+  private readonly approvals = new ApprovalRegistry();
 
   constructor(private readonly options: SlackTransportOptions) {
     this.app = new App({
@@ -74,11 +92,87 @@ export class SlackTransport implements Transport {
       });
     });
 
+    this.registerApprovalButtons();
+
     await this.app.start();
   }
 
   async stop(): Promise<void> {
+    // Deny anything outstanding first, so no turn is left awaiting a click that
+    // can never arrive.
+    this.approvals.drain();
     await this.app.stop();
+  }
+
+  private registerApprovalButtons(): void {
+    // Args are left to Bolt's inference; `body` is a wide union across every
+    // interaction type, so it is narrowed to the handful of fields used here.
+    this.app.action({ action_id: APPROVE_ACTION }, async ({ ack, body, client }) => {
+      await ack();
+      await this.settleApproval(true, body as unknown as SlackActionBody, client);
+    });
+
+    this.app.action({ action_id: DENY_ACTION }, async ({ ack, body, client }) => {
+      await ack();
+      await this.settleApproval(false, body as unknown as SlackActionBody, client);
+    });
+  }
+
+  private async settleApproval(
+    approved: boolean,
+    body: SlackActionBody,
+    client: WebClient,
+  ): Promise<void> {
+    const approvalId = body.actions?.[0]?.value;
+    if (!approvalId) return;
+
+    const userId = body.user?.id ?? "someone";
+    const decision: ApprovalDecision = approved
+      ? { approved: true, by: `<@${userId}>` }
+      : { approved: false, by: `<@${userId}>`, message: `Denied by <@${userId}>.` };
+
+    const entry = this.approvals.settle(approvalId, decision);
+
+    // Slack buttons stay clickable forever, so an unknown id is expected rather
+    // than exceptional: already answered, timed out, or asked before a restart.
+    // Say so in place instead of silently doing nothing.
+    const resolution: Resolution = entry
+      ? approved
+        ? { type: "approved", by: userId }
+        : { type: "denied", by: userId }
+      : { type: "lost" };
+
+    await this.repaintApproval(client, body, entry, resolution);
+  }
+
+  /** Replaces the buttons with the outcome, on whichever message carried them. */
+  private async repaintApproval(
+    client: WebClient,
+    body: SlackActionBody,
+    entry: PendingApproval | undefined,
+    resolution: Resolution,
+  ): Promise<void> {
+    const channel = entry?.channel ?? body.channel?.id;
+    const ts = entry?.messageTs ?? body.message?.ts;
+    if (!channel || !ts) return;
+
+    try {
+      await client.chat.update({
+        channel,
+        ts,
+        text: headline(resolution),
+        blocks: entry
+          ? resolvedBlocks(entry.request, resolution)
+          : [
+              {
+                type: "section",
+                text: { type: "mrkdwn", text: headline(resolution) },
+              },
+            ],
+      });
+    } catch (error) {
+      console.error("[slack] could not update the approval message:", error);
+    }
   }
 
   private conversationId(channel: string, threadTs: string): string {
@@ -96,15 +190,24 @@ export class SlackTransport implements Transport {
       author: { id: input.userId },
     };
 
-    const reply = await SlackReply.open(client, input.channel, input.threadTs);
+    const reply = await SlackReply.open(client, input.channel, input.threadTs, {
+      approvals: this.approvals,
+      timeoutMs: this.options.approvalTimeoutMs,
+    });
+
     await handler(message, reply);
   }
 }
 
+interface ReplyDeps {
+  approvals: ApprovalRegistry;
+  timeoutMs: number;
+}
+
 /**
  * Renders a turn into one editable status message, then replaces it with the
- * answer. Slack lets us edit in place, so progress updates cost no new messages
- * and the thread stays readable afterwards.
+ * answer. Approvals are posted as their own messages so they survive as a
+ * record of what was decided, rather than being overwritten by later progress.
  */
 class SlackReply implements ReplyChannel {
   private lastPaintedAt = 0;
@@ -116,12 +219,14 @@ class SlackReply implements ReplyChannel {
     private readonly channel: string,
     private readonly threadTs: string,
     private readonly statusTs: string | undefined,
+    private readonly deps: ReplyDeps,
   ) {}
 
   static async open(
     client: WebClient,
     channel: string,
     threadTs: string,
+    deps: ReplyDeps,
   ): Promise<SlackReply> {
     let statusTs: string | undefined;
     try {
@@ -135,12 +240,43 @@ class SlackReply implements ReplyChannel {
       // Posting failed (bad scope, archived channel). Progress is then silent,
       // but the turn still runs and complete() will try again.
     }
-    return new SlackReply(client, channel, threadTs, statusTs);
+    return new SlackReply(client, channel, threadTs, statusTs, deps);
   }
 
   async progress(activity: Activity): Promise<void> {
     const detail = activity.detail ? ` \`${activity.detail}\`` : "";
     await this.paint(`:hammer_and_wrench: ${activity.tool}${detail}`);
+  }
+
+  async requestApproval(request: ApprovalRequest): Promise<ApprovalDecision> {
+    const { id, decision } = this.deps.approvals.open(
+      request,
+      this.deps.timeoutMs,
+      (entry) => void this.markExpired(entry),
+    );
+
+    await this.paint(":lock: Waiting for approval…", true);
+
+    try {
+      const posted = await this.client.chat.postMessage({
+        channel: this.channel,
+        thread_ts: this.threadTs,
+        text: approvalFallback(request),
+        blocks: approvalBlocks(request, id),
+      });
+      if (posted.ts) {
+        this.deps.approvals.locate(id, this.channel, posted.ts);
+      }
+    } catch (error) {
+      // If the question cannot be asked, it must not silently become a yes.
+      console.error("[slack] could not post the approval request:", error);
+      this.deps.approvals.settle(id, {
+        approved: false,
+        message: "Could not ask for approval in Slack, so this was not run.",
+      });
+    }
+
+    return decision;
   }
 
   async complete(outcome: TurnOutcome): Promise<void> {
@@ -152,10 +288,9 @@ class SlackReply implements ReplyChannel {
 
     if (outcome.refusals.length > 0) {
       sections.push(
-        [
-          "*Refused while read-only:*",
-          ...outcome.refusals.map((r) => `• \`${r.tool}\` — ${r.reason}`),
-        ].join("\n"),
+        ["*Not run:*", ...outcome.refusals.map((r) => `• \`${r.tool}\` — ${r.reason}`)].join(
+          "\n",
+        ),
       );
     }
 
@@ -184,16 +319,29 @@ class SlackReply implements ReplyChannel {
     }
   }
 
+  private async markExpired(entry: PendingApproval): Promise<void> {
+    if (!entry.channel || !entry.messageTs) return;
+    const resolution: Resolution = { type: "expired" };
+    await this.safely(() =>
+      this.client.chat.update({
+        channel: entry.channel as string,
+        ts: entry.messageTs as string,
+        text: headline(resolution),
+        blocks: resolvedBlocks(entry.request, resolution),
+      }),
+    );
+  }
+
   /**
    * chat.update is rate limited per channel, and tool calls can arrive several
    * per second. Paint at most every 1.5s, and always schedule the last state so
    * a burst of calls doesn't leave a stale line on screen.
    */
-  private async paint(text: string): Promise<void> {
+  private async paint(text: string, force = false): Promise<void> {
     if (!this.statusTs) return;
 
     const elapsed = Date.now() - this.lastPaintedAt;
-    if (elapsed < 1500) {
+    if (!force && elapsed < 1500) {
       this.pending = text;
       this.timer ??= setTimeout(() => {
         this.timer = null;
@@ -239,6 +387,20 @@ class SlackReply implements ReplyChannel {
     }
   }
 }
+
+/**
+ * Bolt's action payload is a wide union; these are the few fields used here.
+ * Narrowed by hand rather than by exhaustive switch, since every variant that
+ * reaches a block button carries them.
+ */
+interface SlackActionBody {
+  user?: { id?: string };
+  channel?: { id?: string };
+  message?: { ts?: string };
+  actions?: Array<{ value?: string }>;
+}
+
+
 
 /** Remove `<@U123>` mentions so the agent sees a clean instruction. */
 function stripMentions(text: string): string {

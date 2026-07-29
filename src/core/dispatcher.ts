@@ -1,4 +1,5 @@
 import { runTurn } from "./agent.js";
+import type { Mode } from "./guard.js";
 import type { SessionStore } from "./sessions.js";
 import type { Refusal } from "./types.js";
 import type { MessageHandler } from "../transports/types.js";
@@ -7,6 +8,7 @@ export interface DispatcherOptions {
   workspace: string;
   model: string;
   maxTurns: number;
+  mode: Mode;
 }
 
 /**
@@ -67,6 +69,8 @@ export class Dispatcher {
         workspace: this.options.workspace,
         model: this.options.model,
         maxTurns: this.options.maxTurns,
+        mode: this.options.mode,
+        approve: (request) => reply.requestApproval(request),
       })) {
         switch (event.kind) {
           case "session":

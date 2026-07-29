@@ -22,6 +22,7 @@ export async function run(config: RuntimeConfig): Promise<void> {
     workspace: config.workspace,
     model: config.model,
     maxTurns: config.maxTurns,
+    mode: config.mode,
   });
 
   const transports = buildTransports(config, sessions);
@@ -37,7 +38,11 @@ export async function run(config: RuntimeConfig): Promise<void> {
       "remote-hands is up.",
       `  workspace: ${config.workspace}`,
       `  model:     ${config.model}`,
-      `  mode:      read-only`,
+      config.mode === "readonly"
+        ? "  mode:      read-only — changes are refused"
+        : `  mode:      approval — changes ask first, ${
+            config.approvalTimeoutMs / 1000
+          }s to answer`,
       "",
     ].join("\n"),
   );
@@ -63,6 +68,7 @@ function buildTransports(
       new SlackTransport({
         ...config.transports.slack,
         knows: (conversationId) => sessions.get(conversationId) !== undefined,
+        approvalTimeoutMs: config.approvalTimeoutMs,
       }),
     );
   }

@@ -1,4 +1,9 @@
-import type { Activity, TurnOutcome } from "../core/types.js";
+import type {
+  Activity,
+  ApprovalDecision,
+  ApprovalRequest,
+  TurnOutcome,
+} from "../core/types.js";
 
 /**
  * A way for a person to reach the agent. Slack today; Discord, Teams, SMS, or
@@ -45,6 +50,20 @@ export interface ReplyChannel {
    * entirely rather than sending a text per tool call.
    */
   progress(activity: Activity): Promise<void>;
+
+  /**
+   * Ask a person whether a tool call may run, and block until they answer.
+   *
+   * The agent is stopped mid-turn while this is outstanding, so an
+   * implementation MUST eventually settle — on a timeout if nothing else.
+   * Never resolving would hang the conversation forever, holding its session.
+   *
+   * A transport with no interactive surface should decline rather than
+   * pretend: returning `{ approved: false }` immediately is a correct
+   * implementation, and means that transport simply cannot authorise changes.
+   */
+  requestApproval(request: ApprovalRequest): Promise<ApprovalDecision>;
+
   /** Called exactly once, at the end of the turn. */
   complete(outcome: TurnOutcome): Promise<void>;
 }

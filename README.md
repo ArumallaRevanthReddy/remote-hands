@@ -125,6 +125,8 @@ systemd unit can be configured without ever running `init`:
 | `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN` | Slack credentials — set both or neither |
 | `RH_WORKSPACE` | Where the agent works |
 | `RH_MODEL` | Default `claude-opus-5` |
+| `RH_MODE` | `approval` (default) or `readonly` |
+| `RH_APPROVAL_TIMEOUT` | Seconds to wait for a click, default 300 |
 | `RH_MAX_TURNS` | Tool-use round trips per message, default 30 |
 | `RH_CONFIG_DIR` | Where config lives, default `~/.remote-hands` |
 
@@ -139,11 +141,50 @@ npm test
 npm run dev -- start
 ```
 
+## Approvals
+
+Inspection runs freely. Anything that could change something — writing a file,
+or a command that isn't plainly read-only — is posted to the thread with
+Approve and Deny buttons, and the agent waits.
+
+```
+🔒 Approval needed — This command could change something.
+    systemctl restart nginx
+    [ Approve ]  [ Deny ]
+```
+
+The command is shown **verbatim, never summarised**. The entire value of the
+step is that a person sees exactly what will run, so a paraphrase would let
+something through on the strength of its description rather than the thing
+itself. Chained commands aren't pre-judged either: `describe-instances && rm -rf
+/tmp/x` reaches you whole, with the second half visible.
+
+Once decided, the buttons are replaced by the outcome, so the thread reads as a
+record of what was approved and by whom.
+
+Things worth knowing before you rely on it:
+
+- **Anyone who can see the message can approve it.** There's no check that the
+  approver is the person who asked, or that they're an admin. In a private ops
+  channel that's usually what you want; in a broad channel it is not. Restrict
+  by channel membership until per-user rules exist.
+- **Unanswered requests deny themselves** after `RH_APPROVAL_TIMEOUT` (default
+  5 minutes). The agent is blocked mid-turn while waiting, so a request nobody
+  answers would otherwise hold the conversation open indefinitely.
+- **A restart abandons anything pending.** Clicking Approve afterwards reports
+  that the request is gone rather than running it — the turn it belonged to no
+  longer exists, so there is nothing left to authorise.
+- **Approval is not a sandbox.** It governs what the agent asks to do, not what
+  it is capable of. The host's IAM role is the real boundary; scope it to what
+  the agent should be able to reach.
+
+Set `RH_MODE=readonly` to drop back to refusing changes outright instead of
+asking.
+
 ## Status
 
-Early, and read-only by design. It can inspect and explain; it cannot change
-anything. Subagents, long-running loops, and the write path with an approval
-gate come next.
+Early. Inspection and approved changes work; subagents and long-running loops
+come next.
 
 ## License
 

@@ -16,11 +16,24 @@ export interface Activity {
   detail: string;
 }
 
-/** A tool call the policy refused. */
+/** A tool call the policy refused without asking anyone. */
 export interface Refusal {
   tool: string;
   reason: string;
 }
+
+/** A tool call that needs a person to decide before it runs. */
+export interface ApprovalRequest {
+  tool: string;
+  /** Exactly what will run — the command or path, shown verbatim. */
+  detail: string;
+  /** Why it needs a decision, in one line. */
+  reason: string;
+}
+
+export type ApprovalDecision =
+  | { approved: true; by?: string }
+  | { approved: false; by?: string; message?: string };
 
 /** How a turn ended. */
 export interface TurnOutcome {
