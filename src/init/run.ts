@@ -234,32 +234,44 @@ async function promptUntilValid<T = unknown>(
 
 async function printSummary(config: StoredConfig): Promise<void> {
   const usingEnvKey = !config.anthropicApiKey;
+  const mode = config.mode ?? "approval";
 
-  console.log(
-    [
-      "",
-      "Done.",
-      "",
-      `  config:    ${configFile()}`,
-      `  workspace: ${config.workspace}`,
-      `  model:     ${config.model ?? "claude-opus-5"}`,
-      `  API key:   ${usingEnvKey ? "from ANTHROPIC_API_KEY" : "saved to config"}`,
-      config.transports?.slack?.team
-        ? `  Slack:     ${config.transports.slack.team}`
-        : "",
-      "",
-      "Start it with:",
-      "",
-      "  remote-hands start",
-      "",
-      "Then mention the bot in a channel it has been invited to, or send it a",
-      "direct message. This build is read-only: it can inspect and explain, but",
-      "it will refuse anything that changes state.",
-      "",
-    ]
-      .filter((line) => line !== "")
-      .join("\n") + "\n",
-  );
+  // Only the optional rows are dropped. Filtering on empty string would take
+  // the deliberate blank lines with it and print the summary as a solid block.
+  const lines: Array<string | null> = [
+    "",
+    "Done.",
+    "",
+    `  config:    ${configFile()}`,
+    `  workspace: ${config.workspace}`,
+    `  model:     ${config.model ?? "claude-opus-5"}`,
+    `  API key:   ${usingEnvKey ? "from ANTHROPIC_API_KEY" : "saved to config"}`,
+    config.transports?.slack?.team
+      ? `  Slack:     ${config.transports.slack.team}`
+      : null,
+    `  mode:      ${
+      mode === "readonly" ? "read-only" : "approval — changes ask first"
+    }`,
+    "",
+    "Start it with:",
+    "",
+    "  remote-hands start",
+    "",
+    "Then mention the bot in a channel it has been invited to, or send it a",
+    "direct message.",
+    "",
+    // Must track the real default. Saying "read-only" while the agent will
+    // happily change things once approved is worse than saying nothing.
+    ...(mode === "readonly"
+      ? ["It can inspect and explain, but will refuse anything that changes state."]
+      : [
+          "Inspection runs freely. Anything that could change state is posted to",
+          "the thread with Approve and Deny buttons, and waits for you.",
+        ]),
+    "",
+  ];
+
+  console.log(`${lines.filter((line) => line !== null).join("\n")}\n`);
 }
 
 /** Runs a check with a one-line progress note, so a slow network isn't silent. */

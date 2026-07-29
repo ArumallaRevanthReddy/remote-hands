@@ -64,7 +64,22 @@ test("does not request scopes nothing uses", () => {
 
 test("setup steps cover both tokens", () => {
   const steps = slackSetupSteps().join(" ");
-  assert.match(steps, /xapp-/, "should say where the app-level token comes from");
   assert.match(steps, /xoxb-/, "should say where the bot token comes from");
-  assert.match(steps, /connections:write/, "app token needs this scope");
+  assert.match(steps, /xapp-/, "should say where the app-level token comes from");
+});
+
+test("setup steps do not send anyone to generate the app token by hand", () => {
+  // Because the manifest enables Socket Mode, Slack generates the app-level
+  // token itself — already scoped connections:write — and shows it alongside
+  // the bot token on the install screen. Observed directly during setup. The
+  // manual "App-Level Tokens" detour these steps used to describe is now extra
+  // work that lands you in the same place.
+  const steps = slackSetupSteps().join(" ");
+  assert.doesNotMatch(steps, /App-Level Tokens/i);
+  assert.doesNotMatch(steps, /Generate Token and Scopes/i);
+});
+
+test("setup steps warn against copying the manifest from the terminal", () => {
+  // It is printed indented for readability, and YAML rejects that.
+  assert.match(slackSetupSteps().join(" "), /indented|saved file/i);
 });

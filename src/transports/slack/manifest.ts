@@ -60,12 +60,15 @@ export function slackSetupSteps(): string[] {
   return [
     `Open ${SLACK_APPS_URL} and click "Create New App", then "From an app manifest".`,
     "Pick the workspace this should live in.",
-    "Choose YAML, replace the contents with the manifest above, and create the app.",
-    'On "Basic Information", scroll to "App-Level Tokens" and click "Generate ' +
-      'Token and Scopes". Give it any name, add the `connections:write` scope, ' +
-      "and copy the `xapp-...` token.",
-    'Go to "OAuth & Permissions", click "Install to Workspace", approve, and ' +
-      "copy the Bot User OAuth Token (`xoxb-...`).",
+    "Choose the YAML tab, select everything in the box, and paste the manifest " +
+      "over it. Copy it from the saved file rather than from this terminal — " +
+      "the copy above is indented for readability, which YAML will reject.",
+    'Click "Next", then "Create and Install", and approve.',
+    "Slack then shows both tokens together: a bot token (`xoxb-...`) and an " +
+      "app-level token (`xapp-...`), the second generated for you because the " +
+      "manifest turns on Socket Mode. Copy them in that order when prompted. " +
+      "Ignore the Slack CLI steps on that screen — they are for building apps " +
+      "a different way.",
     "In Slack, invite the bot to a channel with `/invite @remote-hands` — or " +
       "just send it a direct message.",
   ];
